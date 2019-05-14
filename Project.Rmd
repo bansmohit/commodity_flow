@@ -1,0 +1,448 @@
+---
+title: "Data Analysis of Flow of Commodities in U.S."
+author: "Mohit Bansal and Karan Jain"
+date: '`r Sys.Date()`'
+output:
+  pdf_document: default
+  html_document: default
+header-includes: \usepackage{framed,color}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(stringr)
+library(reshape2)
+library(rvest)
+library(purrr)
+
+# read data from local file
+data <- read.table("csr.txt", header = TRUE)
+```
+
+\begin{shaded}
+Loading the data, tidy and transform it
+\end{shaded}
+
+```{r echo = TRUE}
+# load data into a tibble
+cfs <- as.tibble(data) %>%
+  # tidying the data
+  # separating into different columns
+  separate('SHIPMT_ID.ORIG_STATE.ORIG_MA.ORIG_CFS_AREA.DEST_STATE.DEST_MA.DEST_CFS_AREA.NAICS.QUARTER.SCTG.MODE.SHIPMT_VALUE.SHIPMT_WGHT.SHIPMT_DIST_GC.SHIPMT_DIST_ROUTED.TEMP_CNTL_YN.EXPORT_YN.EXPORT_CNTRY.HAZMAT.WGT_FACTOR', 
+           into = c("SHIPMT_ID", "ORIG_STATE", "ORIG_MA", "ORIG_CFS_AREA",
+                    "DEST_STATE", "DEST_MA", "DEST_CFS_AREA",
+                    "NAICS", "QUARTER", "SCTG", "MODE", "SHIPMT_VALUE",
+                    "SHIPMT_WGHT", "SHIPMT_DIST_GC","SHIPMT_DIST_ROUTED",
+                    "TEMP_CNTL_YN", "EXPORT_YN", "EXPORT_CNTRY",
+                    "HAZMAT", "WGT_FACTOR"), sep = ",") %>%
+  # selecting the relevant columns and transforming them
+  select(ORIG_STATE, DEST_STATE, NAICS, SCTG, MODE, SHIPMT_VALUE, SHIPMT_WGHT, QUARTER) %>%
+  filter(ORIG_STATE != "00") %>%
+  mutate(ORIG_STATE = str_replace_all(ORIG_STATE, c("01" = "Alabama", "02" = "Alaska",
+                                                    "04" = "Arizona", "05" = "Arkansas", 
+                                                    "06" = "California", "08" = "Colorado",
+                                                    "09" = "Connecticut", "10" = "Delaware", 
+                                                    "11" = "District of Columbia", "12" = "Florida", 
+                                                    "13" = "Georgia", "15" = "Hawaii", 
+                                                    "16" = "Idaho", "17" = "Illinois", 
+                                                    "18" = "Indiana", "19" = "Iowa", 
+                                                    "20" = "Kansas", "21" = "Kentucky", 
+                                                    "22" = "Louisiana", "23" = "Maine", 
+                                                    "24" = "Maryland", "25" = "Massachusetts", 
+                                                    "26" = "Michigan", "27" = "Minnesota", 
+                                                    "28" = "Mississippi", "29" = "Missouri", 
+                                                    "30" = "Montana", "31" = "Nebraska", 
+                                                    "32" = "Nevada", "33" = "New Hampshire", 
+                                                    "34" = "New Jersey", "35" = "New Mexico", 
+                                                    "36" = "New York", "37" = "North Carolina", 
+                                                    "38" = "North Dakota", "39" = "Ohio",
+                                                    "40" = "Oklahoma", "41" = "Oregon", 
+                                                    "42" = "Pennsylvania", "44" = "Rhode Island", 
+                                                    "45" = "South Carolina", "46" = "South Dakota", 
+                                                    "47" = "Tennessee", "48" = "Texas", 
+                                                    "49" = "Utah", "50" = "Vermont", 
+                                                    "51" = "Virginia", "53" = "Washington", 
+                                                    "54" = "West Virginia", "55" = "Wisconsin", 
+                                                    "56" = "Wyoming")),
+         DEST_STATE = str_replace_all(DEST_STATE, c("01" = "Alabama", "02" = "Alaska",
+                                                    "04" = "Arizona", "05" = "Arkansas", 
+                                                    "06" = "California", "08" = "Colorado",
+                                                    "09" = "Connecticut", "10" = "Delaware", 
+                                                    "11" = "District of Columbia", "12" = "Florida", 
+                                                    "13" = "Georgia", "15" = "Hawaii", 
+                                                    "16" = "Idaho", "17" = "Illinois", 
+                                                    "18" = "Indiana", "19" = "Iowa", 
+                                                    "20" = "Kansas", "21" = "Kentucky", 
+                                                    "22" = "Louisiana", "23" = "Maine", 
+                                                    "24" = "Maryland", "25" = "Massachusetts", 
+                                                    "26" = "Michigan", "27" = "Minnesota", 
+                                                    "28" = "Mississippi", "29" = "Missouri", 
+                                                    "30" = "Montana", "31" = "Nebraska", 
+                                                    "32" = "Nevada", "33" = "New Hampshire", 
+                                                    "34" = "New Jersey", "35" = "New Mexico", 
+                                                    "36" = "New York", "37" = "North Carolina", 
+                                                    "38" = "North Dakota", "39" = "Ohio",
+                                                    "40" = "Oklahoma", "41" = "Oregon", 
+                                                    "42" = "Pennsylvania", "44" = "Rhode Island", 
+                                                    "45" = "South Carolina", "46" = "South Dakota", 
+                                                    "47" = "Tennessee", "48" = "Texas", 
+                                                    "49" = "Utah", "50" = "Vermont", 
+                                                    "51" = "Virginia", "53" = "Washington", 
+                                                    "54" = "West Virginia", "55" = "Wisconsin", 
+                                                    "56" = "Wyoming")),
+         SCTG = str_extract(SCTG, "^\\d+"),
+         SCTG = as.numeric(SCTG),
+         SHIPMT_VALUE = as.double(SHIPMT_VALUE),
+         SHIPMT_WGHT  = as.double(SHIPMT_WGHT),
+         NAICS = as.integer(NAICS),
+         QUARTER = as.integer(QUARTER))
+
+cfs %>%
+  head(10)
+```
+
+\vspace{0.5in}
+
+\begin{shaded}
+Creating the webscraping function
+\end{shaded}
+
+```{r echo = TRUE}
+# create function to scrape gdp of various states
+gdp_scrape <- function(year = 2007) {
+  
+  url1 <- "http://www.usgovernmentspending.com/compare_state_spending_%sbZ0a"
+  url1 <- sprintf(url1, year)
+  url <- read_html(url1)
+  
+  states <- url %>% 
+    html_nodes("td.lbltier") %>%
+    html_text(trim = T)
+  
+  spending <- url %>%
+    html_nodes(".lbltier+ .sptiera") %>%
+    html_text(trim = T) 
+  
+  
+  debt <- url %>% 
+    html_nodes(".sptier") %>%
+    html_text(trim = T)   
+  
+  gsp <- url %>% 
+    html_nodes(".sptier+ .sptiera") %>%
+    html_text(trim = T)   
+  
+  rgr <- url %>% 
+    html_nodes(".sptiera+ .sptiera") %>%
+    html_text(trim = T)
+  
+  pop <- url %>%
+    html_nodes(".sptiera+ td:nth-child(7)") %>%
+    html_text(trim = T)
+  
+  
+  tibble(
+    state = states,
+    spending = spending,
+    debt = debt,
+    gsp = gsp,
+    rgr = rgr,
+    pop = pop 
+  ) 
+}
+
+# run scraping fuction and transform the data
+gdp <- gdp_scrape(year = 2012) %>%
+  filter(state != "All states combined") %>%
+  # transforming data using strings and regular expressions
+  mutate(spending = str_extract(spending, "\\w+.\\w"),
+         spending = as.double(spending),
+         debt = str_extract(debt, "\\w+.\\w"),
+         debt = as.double(debt),
+         gsp = str_extract(gsp,"(\\w.)?\\w+\\.\\w+"),
+         gsp = str_replace(gsp, ",",""),
+         gsp = as.double(gsp))
+
+gdp %>%
+  head(10)
+```
+
+\vspace{0.5in}
+
+\begin{shaded}
+Data Transformation and Visualization
+\end{shaded}
+
+```{r echo = TRUE}
+# calculate sum of exported shipments from each state
+exp <- cfs %>%
+  group_by(ORIG_STATE) %>%
+  summarise(exports = sum(SHIPMT_VALUE)) %>%
+  mutate(exports = exports/1000000000,
+         exports = round(exports, digits = 4)) %>%
+  rename(state = ORIG_STATE)
+
+# calculate sum of imported shipments for each state
+imp <- cfs %>%
+  group_by(DEST_STATE) %>%
+  summarise(imports = sum(SHIPMT_VALUE)) %>%
+  mutate(imports = imports/1000000000,
+         imports = round(imports, digits = 4)) %>%
+  rename(state = DEST_STATE) %>%
+  # joining the imported shipments with the exported ones
+  inner_join(exp, by = "state")
+
+# combine the previous two tables
+eximp <- melt(imp, id.vars = "state")
+
+# plot shipment value of each state
+ggplot(data = eximp, aes(x = state, y = value, fill = variable)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  coord_flip() +
+  labs(title = "Shipment values in each state",
+       y = "Value (in Billions)",
+       x = "State")
+
+# join gdp data with export and import shipment data
+gdp_net <- imp %>%
+  inner_join(gdp, by = "state") %>%
+  mutate(net = exports - imports) %>%
+  # transforming the first column of dates as rownames
+  remove_rownames %>% 
+  column_to_rownames(var="state")
+
+# plot the graph to determine relation between gsp and shipment value
+ggplot(gdp_net, aes(x = spending, y = net, fill = gsp)) +
+  geom_jitter() +
+  geom_label(label = rownames(gdp_net), color="white", nudge_x = 0.15, nudge_y = 0.15, check_overlap = TRUE) +
+  geom_smooth(se = FALSE) +
+  labs(title = "Relation between state spending, net shipment value and GSP",
+       x = "Spending (in Billions)",
+       y = "Net Shipment Value",
+       caption = "*GSP = Gross State Product")
+```
+
+\vspace{0.5in}
+
+\begin{shaded}
+Exploratory Data Analysis
+\end{shaded}
+
+```{r echo = TRUE}
+# find out the most used mode of shipment across the country
+maxmode <- group_by(cfs,MODE) %>%
+  summarise(count= n())
+
+# plot the graph for modes of shipment across the country
+ggplot(maxmode, aes(x = MODE, y = count)) +
+  geom_line(group = 1, color = "blue", linetype = "dashed") +
+  geom_point() +
+  labs(x = "Transportation Code",
+       y = "Count",
+       caption = "*04, 05 and 14 are various types of Trucks")
+
+# determine the most commodities shipped for the entire country
+maxcom <- cfs %>%
+  group_by(SCTG) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count)) %>%
+  head(5)
+
+maxcom
+# 35 is Electronics
+# 24 is Plastics and Rubbers
+# 43 is Mixed Freight
+# 34 is Machinery
+# 40 is Miscellaneous Products
+
+# determine the industry most shipped to and from across the whole country 
+maxind <- cfs %>%
+  group_by(NAICS) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count)) %>%
+  head(5)
+
+maxind
+# 325 is Chemical Manufacturing
+# 332 is Fabricated Metal Industry
+# 4238 is Machinery and Equipment Wholesalers
+# 311 is Food Manufacturing
+# 4244 is Grocery Wholesalers
+
+# avg value of shipments across the country
+avg_value <- cfs %>%
+  summarise(avg = mean(SHIPMT_VALUE))
+
+avg_value
+
+# avg weight of shipments across the country
+avg_wght <- cfs %>%
+  summarise(avg = mean(SHIPMT_WGHT))
+
+avg_wght
+
+# filtering out shipments between California and Texas
+caltex <- cfs %>%
+  filter((ORIG_STATE == "California" & DEST_STATE == "Texas") |
+        (ORIG_STATE == "Texas" & DEST_STATE == "California"))
+
+# determine the commodities most shipped between California and Texas
+caltex_maxcom <- caltex %>%
+  group_by(SCTG) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count)) %>%
+  head(5)
+
+caltex_maxcom
+# 35 is Electronics
+# 40 is Miscellaneous Products
+# 30 is Textiles and Leather Products
+# 24 is Plastics and Rubbers
+# 34 is Machinery
+
+
+# plot for the commodities shipped between Cal and TX
+ggplot(caltex, aes(x = SCTG)) + 
+  geom_histogram(aes(fill = ..count..)) +
+  labs(x = "SCTG (Standard Classification of Transported Goods) Codes",
+       y = "Count",
+       caption = "*33 is Articles of Base Metal")
+
+# determine the industry most shipped to and from Cal and TX
+caltex_maxind <- caltex %>%
+  group_by(NAICS) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count)) %>%
+  head(5)
+
+caltex_maxind
+# 334 is Computers
+# 325 is Chemical Manufacturing
+# 332 is Fabricated Metal Industry
+# 339 is Miscellaneous
+# 4236 is Electrical
+
+# avg value of shipments between CA and TX
+caltex_avg_value <- caltex %>%
+  summarise(avg = mean(SHIPMT_VALUE))
+
+caltex_avg_value
+
+# avg weight of shipments between CA and TX
+caltex_avg_wght <- caltex %>%
+  summarise(avg = mean(SHIPMT_WGHT))
+
+caltex_avg_wght
+
+# sorting out the most served industry with shipments
+# from California to Texas
+caltex_4236 <- caltex %>%
+  filter(ORIG_STATE == "California" & DEST_STATE == "Texas",
+         NAICS == 4236)
+
+# plot the variation of most served industry served across quarters of 2012
+ggplot(caltex_4236, aes(x = QUARTER, y = SHIPMT_VALUE)) +
+  geom_smooth(se = FALSE) +
+  labs(x = "Quarter",
+       y = "Value",
+       caption = "*Graph for Electronic goods industry")
+
+# sorting out the most served industry in other direction i.e,
+# from Texas to California
+texcal_4236 <- caltex %>%
+  filter(ORIG_STATE == "Texas" & DEST_STATE == "California",
+         NAICS == 4236)
+
+# plot the variation of industry served across quarters of 2012
+ggplot(texcal_4236, aes(x = QUARTER, y = SHIPMT_VALUE)) +
+  geom_smooth(color = "red", se = FALSE) +
+  labs(x = "Quarter",
+       y = "Value",
+       caption = "*Graph for Electronic goods industry")
+
+# filtering out shipments between UT and OH
+utoh <- cfs %>%
+  filter((ORIG_STATE == "Utah" & DEST_STATE == "Ohio") |
+           (ORIG_STATE == "Ohio" & DEST_STATE == "Utah"))
+
+# determine the commodities most shipped between UT and OH
+utoh_maxcom <- utoh %>%
+  group_by(SCTG) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count)) %>%
+  head(5)
+
+utoh_maxcom
+# 35 is Electronics
+# 34 is Machinery
+# 40 is Miscellaneous Products
+# 24 is Plastics and Rubbers
+# 33 is Base Metal Articles
+
+
+# plot the commodities shipped between UT and OH
+ggplot(utoh, aes(x = SCTG)) + 
+  geom_histogram(aes(fill = ..count..)) +
+  labs(x = "SCTG (Standard Classification of Transported Goods) Codes",
+       y = "Count",
+       caption = "*33 is Articles of Base Metal")
+
+# determine the industry most shipped to and from UT and OH
+utoh_maxind <- utoh %>%
+  group_by(NAICS) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count)) %>%
+  head(5)
+
+utoh_maxind
+# 333 is Machinery
+# 332 is Fabricated Metal Industry
+# 311 is Food Manufacturing
+# 334 is Computers
+# 4541 is Electronic Shopping
+
+# avg value of shipments between UT and OH
+utoh_avg_value <- utoh %>%
+  summarise(avg = mean(SHIPMT_VALUE))
+
+utoh_avg_value
+
+# avg weight of shipments between UT and OH
+utoh_avg_wght <- utoh %>%
+  summarise(avg = mean(SHIPMT_WGHT))
+
+utoh_avg_wght
+
+# sort out the most served industry from
+# Utah to Ohio
+utoh_333 <- utoh %>%
+  filter(ORIG_STATE == "Utah" & DEST_STATE == "Ohio",
+         NAICS == 333)
+
+# plot the variation of industry served across quarters of 2012
+ggplot(utoh_333, aes(x = QUARTER, y = SHIPMT_VALUE)) +
+  geom_smooth(color = "green", se = FALSE) +
+  labs(x = "Quarter",
+       y = "Value",
+       caption = "*Graph for Machinery manufacturing industry")
+
+# sort out the most served industry in other direction i.e.
+# from Ohio to Utha
+ohut_333 <- utoh %>%
+  filter(ORIG_STATE == "Ohio" & DEST_STATE == "Utah",
+         NAICS == 333)
+
+# plot the variation of industry served across quarters of 2012
+ggplot(ohut_333, aes(x = QUARTER, y = SHIPMT_VALUE)) +
+  geom_smooth(color = "yellow", se = FALSE) +
+  labs(x = "Quarter",
+       y = "Value",
+       caption = "*Graph for Machinery manufacturing industry")
+
+```
